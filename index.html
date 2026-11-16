@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BitChat Web - Prototype BLE</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: 'Courier New', Courier, monospace;
+            max-width: 700px;
+            margin: 30px auto;
+            padding: 15px;
+        }
+        #header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #30363d;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        #chat-box {
+            height: 350px;
+            border: 1px solid #30363d;
+            background-color: #161b22;
+            padding: 10px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            border-radius: 5px;
+        }
+        .msg { margin: 5px 0; }
+        .sys { color: #8b949e; font-style: italic; }
+        .me { color: #58a6ff; }
+        .peer { color: #3fb950; }
+        #input-area {
+            display: flex;
+            gap: 10px;
+        }
+        input {
+            flex: 1;
+            background-color: #0d1117;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+            padding: 10px;
+            font-family: inherit;
+            border-radius: 5px;
+        }
+        button {
+            background-color: #238636;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            border-radius: 5px;
+        }
+        button:disabled {
+            background-color: #30363d;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <h2>[BitChat BLE]</h2>
+        <button id="connectBtn">Scanner & Connecter</button>
+    </div>
+
+    <div id="chat-box">
+        <div class="msg sys">Prêt. Clique sur "Scanner & Connecter" (Chrome/Edge requis).</div>
+    </div>
+
+    <form id="input-area">
+        <input type="text" id="msgInput" placeholder="Écris ton message..." disabled autocomplete="off">
+        <button type="submit" id="sendBtn" disabled>Envoyer</button>
+    </form>
+
+    <script>
+        // UUIDs personnalisés (Exemple standard Nordic UART Service, très utilisé pour le texte en BLE)
+        const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+        const RX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // Écriture (Client -> Serveur)
+        const TX_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // Notification (Serveur -> Client)
+
+        let writeCharacteristic = null;
+        const encoder = new TextEncoder(); // Convertit String -> Octets
+        const decoder = new TextDecoder(); // Convertit Octets -> String
+
+        const chatBox = document.getElementById('chat-box');
+        const msgInput = document.getElementById('msgInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const connectBtn = document.getElementById('connectBtn');
+
+        // Fonction d'affichage dans le terminal
+        function logMessage(text, type = 'sys') {
+            const div = document.createElement('div');
+            div.className = `msg ${type}`;
+            div.textContent = text;
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        // 1. Connexion Bluetooth
+        connectBtn.addEventListener('click', async () => {
+            try {
+                logMessage('Recherche d\'appareils BLE à proximité...');
+                
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ services: [SERVICE_UUID] }]
+                });
+
+                logMessage(`Connexion à ${device.name || 'Pair inconnu'}...`);
+                const server = await device.gatt.connect();
+
+                // Gestion de la déconnexion
+                device.addEventListener('gattserverdisconnected', () => {
+                    logMessage('Déconnecté de l\'appareil.', 'sys');
+                    msgInput.disabled = true;
+                    sendBtn.disabled = true;
+                    connectBtn.disabled = false;
+                });
+
+                // Récupération du service et des caractéristiques
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                writeCharacteristic = await service.getCharacteristic(RX_CHAR_UUID);
+                const notifyCharacteristic = await service.getCharacteristic(TX_CHAR_UUID);
+
+                // 2. Écoute des messages entrants (Notifications)
+                await notifyCharacteristic.startNotifications();
+                notifyCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+                    const value = event.target.value; // DataView (octets)
+                    const text = decoder.decode(value);
+                    logMessage(`<Pair> ${text}`, 'peer');
+                });
+
+                logMessage('Connecté ! Tu peux discuter.', 'sys');
+                msgInput.disabled = false;
+                sendBtn.disabled = false;
+                connectBtn.disabled = true;
+                msgInput.focus();
+
+            } catch (error) {
+                logMessage(`Erreur : ${error.message}`, 'sys');
+            }
+        });
+
+        // 3. Envoi d'un message
+        document.getElementById('input-area').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const text = msgInput.value.trim();
+            if (!text || !writeCharacteristic) return;
+
+            try {
+                // Encodage du texte en octets (Uint8Array)
+                const data = encoder.encode(text);
+                await writeCharacteristic.writeValue(data);
+                
+                logMessage(`<Moi> ${text}`, 'me');
+                msgInput.value = '';
+            } catch (error) {
+                logMessage(`Échec de l'envoi : ${error.message}`, 'sys');
+            }
+        });
+    </script>
+</body>
+</html>
